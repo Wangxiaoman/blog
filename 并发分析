@@ -1,0 +1,148 @@
+1、volatile
+
+如果一个变量加了volatile关键字，就会告诉编译器和JVM的内存模型：这个变量是对所有线程共享的、可见的，每次jvm都会读取最新写入的值并使其最新值在所有CPU可见。volatile似乎是有时候可以代替简单的锁，似乎加了volatile关键字就省掉了锁。但又说volatile不能保证原子性（java程序员很熟悉这句话：volatile仅仅用来保证该变量对所有线程的可见性，但不保证原子性）。
+
+只能保证内存可见性，不能保证原子性。也就是说，只对于简单赋值、读取是线程安全的。
+
+不要将volatile用在getAndOperate场合（这种场合不原子，需要再加锁），仅仅set或者get的场景是适合volatile的。
+
+volatile int a =0；
+比如两个线程调用i++ 的操作，那么都是线程不安全的。
+
+
+
+
+2、线程池
+1）核心函数
+public ThreadPoolExecutor(int corePoolSize,
+                              int maximumPoolSize,
+                              long keepAliveTime,
+                              TimeUnit unit,
+                              BlockingQueue<Runnable> workQueue) {
+        this(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue,
+             Executors.defaultThreadFactory(), defaultHandler);
+    }
+
+
+
+
+1new ThreadPoolExecutor(corePoolSize, maximumPoolSize,
+2keepAliveTime, milliseconds,runnableTaskQueue, threadFactory,handler);
+corePoolSize:核心线程数量，即使工作线程空闲，也继续保持。
+maxmunPoolSize：线程池最大线程数量。
+keepAliveTime：线程池中如果工作线程的数量超过了核心线程数，空闲线程所保持的时间。如果线程数量比较多，这个保持的时间可以稍微加大。
+TimeUnit:时间单位
+
+workQueue：任务队列，用于执行任务的阻塞队列
+ArrayBlockingQueue：有界队列
+LinkedBlockingQueue：无界队列，基于链表。newFixedThreadPool使用这个队列
+SynchronousQueue：不存储元素的队列，每个插入操作必须等到线程将这个任务移除。newCachedThreadPool使用这个队列
+PriorityBlockingQueue：带有优先级的阻塞队列
+
+
+2）流程图：
+
+
+当提交一个新任务到线程池的时候
+1）首先会判断核心工作线程的数量，如果小于核心线程数量，那么新建一个工作线程，执行任务
+2）如果工作线程到达最核心线程数，那么判断队列是否已满，没满则加入队列
+3）如果队列已满，判断工作线程是否到达最大线程数，如果没到，创建一个工作线程，执行任务
+4）否则按照策略来处理无法执行的任务
+
+
+public void execute(Runnable command) {
+  
+if (command == null)
+  
+  throw new NullPointerException();
+  
+  //如果线程数小于基本线程数，则创建线程并执行当前任务
+  
+  if (poolSize >= corePoolSize || !addIfUnderCorePoolSize(command)) {
+  
+    //如线程数大于等于基本线程数或线程创建失败，则将当前任务放到工作队列中。
+  
+    if (runState == RUNNING && workQueue.offer(command)) {
+  
+      if (runState != RUNNING || poolSize == 0)
+  
+        ensureQueuedTaskHandled(command);
+  
+      }
+  
+      //如果线程池不处于运行中或任务无法放入队列，并且当前线程数量小于最大允许的线程数量，则创建一个线程执行任务。
+
+      else if (!addIfUnderMaximumPoolSize(command))
+  
+        //抛出RejectedExecutionException异常
+  
+        reject(command); // is shutdown or saturated
+  
+  }
+  
+}
+
+
+
+3）工作线程
+线程池创建线程的时候，回将线程封装成Worker工作线程，工作线程在无限循环来获取队列中的任务来执行。
+
+public void run() {
+ 
+     try {
+  
+           Runnable task = firstTask;
+  
+           firstTask = null;
+  
+            while (task != null || (task = getTask()) != null) {
+  
+                    runTask(task);
+  
+                    task = null;
+ 
+            }
+  
+      } finally {
+  
+             workerDone(this);
+  
+      }
+  
+}
+
+
+
+3、几种保证线程安全的思想
+
+1)、cow：copy on write    CopyOnWriteArrayList、CopyOnWriteArraySet
+实现：每当写入新数据，会copy到一个新的数组（过程加锁），当写完的时候，引用指向新的数组，在这期间get，那么只能获取到老的数组。
+思想：读写分离，适合读多写少。
+
+2)、ConcurrentHashMap
+实现：利用锁，对map进行分段加锁，这样对于不同段的操作，不存在着并发冲突
+思想：分治，缩小局部作用域。
+
+3)、Volatile
+保证变量的可见性，但是不保证操作原子性
+思想：及时可见，适合简单读写，不适合带有运算、操作的读写。
+
+4)、CAS：compare and set
+利用了循环（也可以叫自旋锁），当前数据和内存数据一直，那么可以替换为新的数据。如果不同，则在循环中等待。
+cas底层操作是利用jni的方法。
+思想：不是最新的数据，那么就自旋继续获取最新的数据，直到成功
+
+5)、Atomic包下内容
+利用CAS实现各种数据类型的线程安全，Atomic下所包含的数据是Volatile的。
+
+    public final int getAndSet(int newValue) {
+        for (;;) {
+            //每次循环试图过去当前的最新数据
+            int current = get();
+            //compareAndSet方法是调用jni的方法，原子操作
+            if (compareAndSet(current, newValue))
+                return current;
+        }
+    }
+
+
